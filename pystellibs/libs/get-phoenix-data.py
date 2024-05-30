@@ -1,6 +1,7 @@
 import urllib.request
 from astropy.io import fits
 import numpy as np
+import astropy.table
 
 remote_repo = 'https://archive.stsci.edu/hlsps/reference-atlases/cdbs/grid/phoenix/'
 
@@ -15,7 +16,9 @@ files = list(set([d.split('[')[0] for d in catalog[1].data['FILENAME']]))
 
 catalog.close()
 
-for fname in files[:4]:
+ref_wavelengths = None
+
+for fname in files:
     # recover logZ, Teff, and logT
     temp = fname.split('/')[0][-3:]
     if temp[0] == 'p':
@@ -31,24 +34,37 @@ for fname in files[:4]:
     with urllib.request.urlopen(remote_repo + fname) as f:
         hdulist = fits.open(f)
 
-    if fname == files[0]:
-        wavelengths = hdulist[1].data['WAVELENGTH']
+    wavelengths = hdulist[1].data['WAVELENGTH']
+    
+    # check whether wavelengths match the reference 
+    # or do we prefer just going with a nearest neighbor in the grid instead of combining?
+    if len(wavelengths) != 5000:
+        if ref_wavelengths is None:
+            raise ValueError('Reference wavelengths not yet defined!')
+    elif ref_wavelengths is None:
+        ref_wavelengths = wavelengths
 
-    for logg_str in [c.name for c in hdulist[1].columns if 'g' in c.name][:2]:
-        spectra.append(hdulist[1].data[logg_str])
-
+    for logg_str in [c.name for c in hdulist[1].columns if 'g' in c.name]:
         logg = float(logg_str.strip('g')) / 10
         params.append([logZ, logg, logT, Teff])
 
+        spec = hdulist[1].data[logg_str]
+        # resample the spectra to the reference so that the lengths all match
+        if len(wavelengths) != 5000:
+            resampled_spec = np.interp(ref_wavelengths, wavelengths, spec)
+            spectra.append(resampled_spec)
+        else:
+            spectra.append(spec)
+
     hdulist.close()
 
-params = np.array(np.array(params),
-                  dtype=[('logZ', float),
-                         ('logg', float),
-                         ('logT', float),
-                         ('Teff', float)])
+params = astropy.table.Table(np.array(params, dtype=np.float32),
+                             names=['logZ', 'logg', 'logT', 'Teff'])
 
-spectra = np.array(spectra)
-wavelengths = np.array(wavelengths)
+# wavelengths are the last row of the array
+spectra = np.vstack([spectra, wavelengths])
 
-# chuck params and spectra into an HDU
+hdul = fits.HDUList()
+hdul.append(fits.PrimaryHDU(data=spectra.T))
+hdul.append(fits.BinTableHDU(params, name='PHOENIX'))
+hdul.writeto('phoenix.grid.fits', overwrite=True)
