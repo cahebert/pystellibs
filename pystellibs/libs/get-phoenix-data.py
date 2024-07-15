@@ -4,6 +4,7 @@ import numpy as np
 import astropy.table
 
 remote_repo = 'https://archive.stsci.edu/hlsps/reference-atlases/cdbs/grid/phoenix/'
+ZSUN = .0134
 
 params = []
 spectra = []
@@ -19,7 +20,7 @@ catalog.close()
 ref_wavelengths = None
 
 for fname in files:
-    # recover logZ, Teff, and logT
+    # recover logZ, Z, Teff, and logT
     temp = fname.split('/')[0][-3:]
     if temp[0] == 'p':
         logZ = float(temp[1:]) / 10
@@ -27,6 +28,7 @@ for fname in files:
         logZ = -float(temp[1:]) / 10
     else:
         raise ValueError('Something went wrong recovering log Z!')
+    Z = 10**(logZ + np.log10(ZSUN))
 
     Teff = int(fname.split('_')[-1].split('.')[0])
     logT = np.log10(Teff)
@@ -46,7 +48,7 @@ for fname in files:
 
     for logg_str in [c.name for c in hdulist[1].columns if 'g' in c.name]:
         logg = float(logg_str.strip('g')) / 10
-        params.append([logZ, logg, logT, Teff])
+        params.append([logZ, logg, logT, Teff, Z])
 
         spec = hdulist[1].data[logg_str]
         # resample the spectra to the reference so that the lengths all match
@@ -59,12 +61,12 @@ for fname in files:
     hdulist.close()
 
 params = astropy.table.Table(np.array(params, dtype=np.float32),
-                             names=['logZ', 'logg', 'logT', 'Teff'])
+                             names=['logZ', 'logg', 'logT', 'Teff', 'Z'])
 
 # wavelengths are the last row of the array
 spectra = np.vstack([spectra, wavelengths])
 
 hdul = fits.HDUList()
-hdul.append(fits.PrimaryHDU(data=spectra.T))
+hdul.append(fits.PrimaryHDU(data=spectra))
 hdul.append(fits.BinTableHDU(params, name='PHOENIX'))
 hdul.writeto('phoenix.grid.fits', overwrite=True)
